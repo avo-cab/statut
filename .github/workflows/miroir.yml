@@ -1,0 +1,64 @@
+name: Miroir de la page d'etat
+
+# LE MIROIR DE statut.carliavocat.fr, CHEZ GITHUB (docs/etat_service_design.md § 7 bis).
+#
+# ⚠ CE FICHIER VIT DANS LE DEPOT PUBLIC avo-cab/statut, en
+# .github/workflows/miroir.yml ; sa source est deploy/statut/miroir/ du depot avocab,
+# et l'on recopie les deux fichiers (celui-ci et miroir.py) quand ils changent.
+#
+# Toutes les cinq minutes : miroir.py lit la page et l'etat de chaque site chez le
+# service, et GitHub Pages en publie la copie. Si le service ne repond pas, la copie
+# precedente est reprise et le logiciel est sonde depuis GitHub.
+#
+# ⚠ GITHUB RETARDE SOUVENT UN PASSAGE PLANIFIE (dix a vingt minutes aux heures
+# chargees) : le miroir est une page de secours, pas une mesure a la minute.
+# ⚠ DEPOT PUBLIC : les minutes d'Actions y sont gratuites, et GitHub Pages n'y
+# demande aucun forfait. Rien de secret n'y passe -- la page est publique.
+# ⚠⚠ GITHUB DESACTIVE UN PASSAGE PLANIFIE apres 60 jours sans activite dans un depot
+# public : l'etape « rester actif » le reactive par l'API une fois par jour.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write
+
+# Un passage a la fois ; le suivant attend, il ne coupe pas celui qui publie.
+concurrency:
+  group: miroir
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment:
+      name: github-pages
+      url: ${{ steps.publication.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Copier la page et l'etat des sites
+        env:
+          MIROIR_ADRESSE: ${{ steps.pages.outputs.base_url }}
+        run: python3 miroir.py _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: publication
+        uses: actions/deploy-pages@v4
+      - name: Rester actif (une fois par jour)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Le premier passage apres minuit (heure de GitHub) suffit.
+          if [ "$(date -u +%H%M)" \< "0010" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/miroir.yml/enable"
+          fi
